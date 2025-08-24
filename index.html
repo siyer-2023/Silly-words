@@ -1,0 +1,350 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Moana & Ocean Adventure – Interactive Crossword</title>
+  <style>
+    :root{
+      --bg:#0b132b; --card:#1c2541; --ink:#e0e6ff; --accent:#5bc0be; --muted:#a9b5d6; --wrong:#ff6b6b; --right:#71f79f;
+    }
+    html,body{height:100%;}
+    body{margin:0;background:linear-gradient(180deg,#0b132b,#0d1b2a);color:var(--ink);font-family:Inter,system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif;}
+    header{padding:18px 20px;text-align:center}
+    header h1{margin:0;font-size:clamp(20px,3vw,28px)}
+    header p{margin:6px 0 0;color:var(--muted)}
+
+    .wrap{display:grid;grid-template-columns:1fr;gap:18px;max-width:1100px;margin:0 auto;padding:16px}
+    @media(min-width:1000px){.wrap{grid-template-columns:520px 1fr;align-items:start}}
+
+    .card{background:var(--card);border:1px solid rgba(255,255,255,.08);border-radius:16px;padding:14px 16px;box-shadow:0 10px 30px rgba(0,0,0,.25)}
+    .toolbar{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0 6px}
+    button,.chip{border:none;background:#111a33;color:var(--ink);padding:10px 12px;border-radius:12px;cursor:pointer;font-weight:600}
+    button:hover{outline:1px solid var(--accent)}
+    button:disabled{opacity:.6;cursor:not-allowed}
+    .chip{background:#0f233d;color:var(--muted)}
+
+    .grid{display:grid;grid-template-columns:repeat(var(--cols), 36px);gap:4px;justify-content:center;margin:10px auto}
+    .cell{width:36px;height:36px;display:grid;place-items:center;background:#0f1b36;border-radius:8px;position:relative;border:1px solid rgba(255,255,255,.06)}
+    .cell.block{background:#091026;border-color:rgba(255,255,255,.02)}
+    .cell input{width:100%;height:100%;background:transparent;border:none;color:var(--ink);text-transform:uppercase;text-align:center;font-size:18px;font-weight:700;outline:none;}
+    .num{position:absolute;left:6px;top:4px;font-size:10px;color:var(--muted)}
+    .cell.highlight{outline:2px solid var(--accent)}
+    .cell.correct input{background:rgba(113,247,159,.12)}
+    .cell.wrong input{background:rgba(255,107,107,.14)}
+
+    h2{font-size:18px;margin:8px 0}
+    ol{padding-left:18px;margin:8px 0}
+    li{margin:6px 0}
+    .badge{display:inline-block;background:rgba(91,192,190,.18);color:var(--accent);border:1px solid rgba(91,192,190,.4);border-radius:999px;padding:2px 8px;font-size:12px;margin-left:6px}
+    .footer{color:var(--muted);font-size:12px;text-align:center;margin:8px 0 16px}
+  </style>
+</head>
+<body>
+  <header>
+    <h1>🌺 Moana & Ocean Adventure – Interactive Crossword</h1>
+    <p>Click a clue, type your answers, and use <em>Check</em> or <em>Reveal</em> if you get stuck. Works great on phones too!</p>
+  </header>
+
+  <div class="wrap">
+    <section class="card">
+      <div class="toolbar">
+        <button id="checkBtn" title="Check filled letters">Check</button>
+        <button id="revealLetterBtn">Reveal Letter</button>
+        <button id="revealWordBtn">Reveal Word</button>
+        <button id="resetBtn">Reset</button>
+        <span class="chip" id="progressChip">0% solved</span>
+      </div>
+      <div id="grid" class="grid" aria-label="Crossword grid"></div>
+      <div class="footer">Tip: Use arrow keys to move. Tab/Shift+Tab cycles through clue answers.</div>
+    </section>
+
+    <section class="card">
+      <h2>Across</h2>
+      <ol id="acrossList"></ol>
+      <h2>Down</h2>
+      <ol id="downList"></ol>
+    </section>
+  </div>
+
+  <script>
+    // ====== Puzzle Data (Topic: Moana & Ocean Adventure) ======
+    // You can swap this list with any topic you like. Answers must be A–Z (no spaces); use hyphens in clues only.
+    const WORDS = [
+      { answer: 'MOANA', clue: 'Hero who sails beyond the reef.' },
+      { answer: 'MAUI', clue: 'Demigod with a magical fishhook.' },
+      { answer: 'TEFITI', clue: 'Goddess whose heart must be restored.' },
+      { answer: 'HEIHEI', clue: 'The very confused chicken on the canoe.' },
+      { answer: 'PUA', clue: 'Adorable pig and best buddy.' },
+      { answer: 'TAMATOA', clue: 'Giant, shiny-loving crab from Lalotai.' },
+      { answer: 'KAKAMORA', clue: 'Coconut-armored pirates on tiny boats.' },
+      { answer: 'WAYFINDING', clue: 'Traditional Polynesian navigation method.' },
+      { answer: 'OCEAN', clue: 'This chooses Moana and helps her sail.' },
+      { answer: 'CANOE', clue: 'Polynesian vessel used for voyaging.' },
+      { answer: 'MOTUNUI', clue: 'Moana’s island home.' },
+      { answer: 'HEART', clue: 'Green stone that must be returned.' },
+    ];
+
+    // ====== Lightweight placement engine ======
+    // Places words onto a grid with simple crossing logic. If a word can cross an existing word, it will; otherwise it tries open spots.
+
+    const MAX = 15; // grid size (square)
+    const grid = Array.from({length: MAX}, () => Array(MAX).fill('#'));
+
+    // Utility to place the first (longest) word horizontally in the middle
+    function seedFirstWord(word){
+      const row = Math.floor(MAX/2);
+      const start = Math.floor((MAX - word.length)/2);
+      for(let i=0;i<word.length;i++) grid[row][start+i] = word[i];
+      return {row, col:start, dir:'across', len:word.length};
+    }
+
+    // Try to place a word crossing existing letters; return placement or null
+    function tryCrossPlace(word){
+      for(let r=0;r<MAX;r++){
+        for(let c=0;c<MAX;c++){
+          const ch = grid[r][c];
+          if(ch === '#' ) continue;
+          for(let i=0;i<word.length;i++){
+            if(word[i] !== ch) continue;
+            // Try across placement with word[i] at (r,c)
+            const startC = c - i;
+            if(startC >= 0 && startC + word.length <= MAX){
+              if(canPlace(word, r, startC, 'across')) return {row:r, col:startC, dir:'across'};
+            }
+            // Try down placement
+            const startR = r - i;
+            if(startR >= 0 && startR + word.length <= MAX){
+              if(canPlace(word, startR, c, 'down')) return {row:startR, col:c, dir:'down'};
+            }
+          }
+        }
+      }
+      return null;
+    }
+
+    function canPlace(word, r, c, dir){
+      for(let k=0;k<word.length;k++){
+        const rr = dir==='across' ? r : r+k;
+        const cc = dir==='across' ? c+k : c;
+        const cell = grid[rr][cc];
+        if(cell !== '#' && cell !== word[k]) return false; // conflict
+        // Ensure boundary blocks around word ends (no touching words end-to-end)
+      }
+      return true;
+    }
+
+    function commit(word, r, c, dir){
+      for(let k=0;k<word.length;k++){
+        const rr = dir==='across' ? r : r+k;
+        const cc = dir==='across' ? c+k : c;
+        grid[rr][cc] = word[k];
+      }
+    }
+
+    // Prepare words: longest first for better packing
+    const words = WORDS.map((w,i)=>({...w, idx:i})).sort((a,b)=>b.answer.length - a.answer.length);
+    const placements = [];
+
+    // Seed with the first (longest) word horizontally
+    placements.push({...seedFirstWord(words[0].answer), idx: words[0].idx});
+
+    // Place rest
+    for(let j=1;j<words.length;j++){
+      const w = words[j].answer;
+      let place = tryCrossPlace(w);
+      if(!place){
+        // fallback: scan rows for first fit across
+        outer: for(let r=0;r<MAX;r++){
+          for(let c=0;c<=MAX - w.length;c++){
+            if(canPlace(w, r, c, 'across')){ place = {row:r,col:c,dir:'across'}; break outer; }
+          }
+        }
+      }
+      if(!place){
+        // final fallback: scan columns for down fit
+        outer2: for(let c=0;c<MAX;c++){
+          for(let r=0;r<=MAX - w.length;r++){
+            if(canPlace(w, r, c, 'down')){ place = {row:r,col:c,dir:'down'}; break outer2; }
+          }
+        }
+      }
+      if(place){ commit(w, place.row, place.col, place.dir); placements.push({...place, idx: words[j].idx, len: w.length}); }
+    }
+
+    // Trim grid bounds to content to make it compact
+    function computeBounds(){
+      let rMin=MAX, rMax=0, cMin=MAX, cMax=0, has=false;
+      for(let r=0;r<MAX;r++) for(let c=0;c<MAX;c++) if(grid[r][c] !== '#'){ has=true; rMin=Math.min(rMin,r); rMax=Math.max(rMax,r); cMin=Math.min(cMin,c); cMax=Math.max(cMax,c); }
+      if(!has) return {rMin:0,rMax:4,cMin:0,cMax:4};
+      return {rMin, rMax, cMin, cMax};
+    }
+    const B = computeBounds();
+
+    // Numbering for crossword clues
+    function numberCells(){
+      const nums = Array.from({length:MAX}, ()=>Array(MAX).fill(0));
+      let n=1; const across=[], down=[];
+      for(let r=B.rMin;r<=B.rMax;r++){
+        for(let c=B.cMin;c<=B.cMax;c++){
+          if(grid[r][c]==='#') continue;
+          const startAcross = (c===B.cMin || grid[r][c-1]==='#');
+          const startDown   = (r===B.rMin || grid[r-1][c]==='#');
+          if(startAcross || startDown){ nums[r][c]=n++; }
+        }
+      }
+      // Build clue lists
+      for(const p of placements){
+        const r=p.row, c=p.col, dir=p.dir, len=p.len;
+        const no=nums[r][c];
+        const {answer, clue} = WORDS[p.idx];
+        if(dir==='across') across.push({no, clue, len, idx:p.idx, row:r, col:c, dir});
+        else down.push({no, clue, len, idx:p.idx, row:r, col:c, dir});
+      }
+      // Sort by numbers
+      across.sort((a,b)=>a.no-b.no); down.sort((a,b)=>a.no-b.no);
+      return {nums, across, down};
+    }
+    const {nums, across, down} = numberCells();
+
+    // ====== Render UI ======
+    const gridEl = document.getElementById('grid');
+    const rows = B.rMax-B.rMin+1, cols=B.cMax-B.cMin+1; gridEl.style.setProperty('--cols', cols);
+
+    // Build DOM cells and inputs
+    const inputs = Array.from({length:rows},()=>Array(cols).fill(null));
+    for(let r=B.rMin;r<=B.rMax;r++){
+      for(let c=B.cMin;c<=B.cMax;c++){
+        const div = document.createElement('div');
+        div.className = 'cell' + (grid[r][c]==='#'?' block':'');
+        if(grid[r][c] !== '#'){
+          const n = nums[r][c];
+          if(n) { const s=document.createElement('div'); s.className='num'; s.textContent=n; div.appendChild(s); }
+          const inp = document.createElement('input');
+          inp.setAttribute('maxlength','1');
+          inp.setAttribute('aria-label', `Row ${r-B.rMin+1} Column ${c-B.cMin+1}`);
+          inp.addEventListener('input', (e)=>{ e.target.value = e.target.value.toUpperCase().replace(/[^A-Z]/g,''); moveNext(r,c); updateProgress(); });
+          inp.addEventListener('keydown', (e)=>handleNav(e,r,c));
+          div.appendChild(inp);
+          inputs[r-B.rMin][c-B.cMin]=inp;
+        }
+        gridEl.appendChild(div);
+      }
+    }
+
+    function handleNav(e,r,c){
+      const rr=r-B.rMin, cc=c-B.cMin;
+      if(e.key==='ArrowRight') focusCell(rr,cc+1);
+      if(e.key==='ArrowLeft') focusCell(rr,cc-1);
+      if(e.key==='ArrowDown') focusCell(rr+1,cc);
+      if(e.key==='ArrowUp') focusCell(rr-1,cc);
+      if(e.key==='Backspace' && !inputs[rr][cc].value){ focusCell(rr,cc-1); }
+    }
+    function focusCell(rr,cc){ if(inputs[rr] && inputs[rr][cc]) inputs[rr][cc].focus(); }
+    function moveNext(r,c){ const rr=r-B.rMin, cc=c-B.cMin; focusCell(rr,cc+1); }
+
+    // Populate clue lists
+    function renderClues(list, data){
+      list.innerHTML='';
+      data.forEach((cl)=>{
+        const li=document.createElement('li');
+        const a=document.createElement('a');
+        a.href='#'; a.textContent=`${cl.no}. ${cl.clue} `;
+        const len=document.createElement('span'); len.className='badge'; len.textContent=`${cl.len} letters`;
+        a.appendChild(len);
+        a.addEventListener('click',(e)=>{ e.preventDefault(); highlightAnswer(cl); });
+        li.appendChild(a); list.appendChild(li);
+      });
+    }
+    renderClues(document.getElementById('acrossList'), across);
+    renderClues(document.getElementById('downList'), down);
+
+    function highlightAnswer(cl){
+      clearHighlights();
+      for(let k=0;k<cl.len;k++){
+        const rr = cl.dir==='across' ? cl.row : cl.row+k;
+        const cc = cl.dir==='across' ? cl.col+k : cl.col;
+        const el = gridEl.children[(rr-B.rMin)*cols + (cc-B.cMin)];
+        el.classList.add('highlight');
+        const inp = inputs[rr-B.rMin][cc-B.cMin];
+        if(k===0 && inp) inp.focus();
+      }
+    }
+    function clearHighlights(){
+      [...gridEl.children].forEach(c=>c.classList.remove('highlight'));
+    }
+
+    // ====== Game Controls ======
+    function checkFilled(){
+      let correct=0, filled=0;
+      for(let r=B.rMin;r<=B.rMax;r++){
+        for(let c=B.cMin;c<=B.cMax;c++){
+          const ch = grid[r][c];
+          if(ch==='#') continue;
+          const inp = inputs[r-B.rMin][c-B.cMin];
+          const val = (inp.value||'').toUpperCase();
+          filled += val ? 1 : 0;
+          const cellEl = gridEl.children[(r-B.rMin)*cols + (c-B.cMin)];
+          cellEl.classList.remove('wrong','correct');
+          if(!val) continue;
+          if(val===ch){ cellEl.classList.add('correct'); correct++; }
+          else cellEl.classList.add('wrong');
+        }
+      }
+      updateProgress();
+    }
+
+    function revealOneLetter(){
+      // find first incorrect or empty cell and reveal it
+      for(let r=B.rMin;r<=B.rMax;r++){
+        for(let c=B.cMin;c<=B.cMax;c++){
+          const ch = grid[r][c];
+          if(ch==='#') continue;
+          const inp = inputs[r-B.rMin][c-B.cMin];
+          const val = (inp.value||'').toUpperCase();
+          if(val!==ch){ inp.value = ch; updateProgress(); return; }
+        }
+      }
+    }
+    function revealWord(){
+      // reveal the currently highlighted answer, else reveal first incomplete word
+      const target = [...gridEl.children].some(el=>el.classList.contains('highlight')) ? null : (across[0]||down[0]);
+      if(target){ fillWord(target); return; }
+      // if something is highlighted, reveal that sequence
+      const idxs = [];
+      [...gridEl.children].forEach((el,i)=>{ if(el.classList.contains('highlight')) idxs.push(i); });
+      if(idxs.length){ idxs.forEach(i=>{ const r = Math.floor(i/cols)+B.rMin; const c = (i%cols)+B.cMin; const ch=grid[r][c]; const inp=inputs[r-B.rMin][c-B.cMin]; inp.value=ch; });
+      }
+      updateProgress();
+    }
+    function fillWord(cl){
+      for(let k=0;k<cl.len;k++){
+        const rr = cl.dir==='across' ? cl.row : cl.row+k;
+        const cc = cl.dir==='across' ? cl.col+k : cl.col;
+        const ch = grid[rr][cc];
+        const inp = inputs[rr-B.rMin][cc-B.cMin];
+        inp.value = ch;
+      }
+      updateProgress();
+    }
+
+    function resetAll(){
+      for(let r=B.rMin;r<=B.rMax;r++) for(let c=B.cMin;c<=B.cMax;c++) if(grid[r][c] !== '#'){ inputs[r-B.rMin][c-B.cMin].value=''; const el=gridEl.children[(r-B.rMin)*cols + (c-B.cMin)]; el.classList.remove('wrong','correct'); }
+      updateProgress();
+    }
+
+    function updateProgress(){
+      let total=0, solved=0;
+      for(let r=B.rMin;r<=B.rMax;r++) for(let c=B.cMin;c<=B.cMax;c++) if(grid[r][c] !== '#'){ total++; if((inputs[r-B.rMin][c-B.cMin].value||'').toUpperCase()===grid[r][c]) solved++; }
+      const pct = Math.round((solved/total)*100);
+      document.getElementById('progressChip').textContent = `${pct}% solved`;
+    }
+
+    document.getElementById('checkBtn').addEventListener('click', checkFilled);
+    document.getElementById('revealLetterBtn').addEventListener('click', revealOneLetter);
+    document.getElementById('revealWordBtn').addEventListener('click', revealWord);
+    document.getElementById('resetBtn').addEventListener('click', resetAll);
+
+  </script>
+</body>
+</html>
